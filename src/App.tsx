@@ -21,8 +21,7 @@ import Notifications from "./pages/dashboard/notifications";
 import Profile from "./pages/dashboard/profile";
 import Settings from "./pages/dashboard/settings";
 import AdminDashboard from "./pages/dashboard/admin";
-import AssignmentDetail from "./pages/dashboard/assignment-detail";
-
+import AssignmentDetail from "./pages/dashboard/assignment-detail";import VerifyEmail from "./pages/verify-email";
 function App() {
   return (
     <Routes>
@@ -39,6 +38,8 @@ function App() {
         path="/signup"
         element={<Signup />}
       />
+
+      <Route path="/verify-email" element={<VerifyEmail />} />
 
       <Route
         path="/writer-application"

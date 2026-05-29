@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabase/client";
 import { useAuth } from "../context/auth-context";
+import { updateAssignmentStatus } from "../lib/assignment-utils";
 import {
   Sparkles,
   Upload,
@@ -94,8 +95,7 @@ const WriterDashboard = () => {
         supabase
           .from("assignments")
           .select("*")
-          .eq("status", "pending")
-          
+          .eq("status", "open")
           .is("writer_id", null)
           .order("created_at", {
             ascending: false,
@@ -108,7 +108,7 @@ const WriterDashboard = () => {
           .in("status", [
             "accepted",
             "in_progress",
-            "submitted",
+            "ready_for_review",
           ])
           .order("created_at", {
             ascending: false,
@@ -178,31 +178,25 @@ const WriterDashboard = () => {
 
       if (!user) return;
 
-      const { data, error } =
-        await supabase.rpc(
-          "accept_assignment",
-          {
-            p_assignment_id:
-              assignment.id,
-          }
-        );
+      // Atomic acceptance: set writer_id only if status is still `open` and unclaimed
+      const { data: updated, error: updateError } = await supabase
+        .from("assignments")
+        .update({ writer_id: user.id })
+        .eq("id", assignment.id)
+        .eq("status", "open")
+        .is("writer_id", null)
+        .select();
 
-      if (error) throw error;
+      if (updateError) throw updateError;
 
-      if (!data) {
-        alert(
-          "This assignment was claimed by another writer."
-        );
-
+      if (!updated || updated.length === 0) {
+        alert("This assignment was claimed by another writer.");
         await loadWriterData();
-
         return;
       }
 
-      alert(
-        "Assignment accepted successfully."
-      );
-
+      await updateAssignmentStatus(assignment.id, "accepted");
+      alert("Assignment accepted successfully.");
       await loadWriterData();
     } catch (err: any) {
       console.error(err);

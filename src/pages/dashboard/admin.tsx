@@ -22,6 +22,14 @@ interface PendingWriter {
   created_at: string;
 }
 
+interface VerifiedWriter {
+  id: string;
+  full_name: string;
+  writer_status?: string;
+  verified?: boolean;
+  created_at: string;
+}
+
 interface DisputedOrder {
   id: string;
   title: string;
@@ -39,6 +47,8 @@ interface ConfigItem {
 }
 
 type AdminTab = "verification" | "disputes" | "commission" | "analytics";
+
+type WriterVerificationFilter = "pending" | "verified";
 
 const adminTabs: Array<{ id: AdminTab; label: string; path: string; icon: typeof UserCheck }> = [
   { id: "verification", label: "Writer Verifications", path: "/admin-dashboard/writer-verifications", icon: UserCheck },
@@ -62,6 +72,8 @@ const AdminDashboard = () => {
   
   // Data States
   const [pendingWriters, setPendingWriters] = useState<PendingWriter[]>([]);
+  const [verifiedWriters, setVerifiedWriters] = useState<VerifiedWriter[]>([]);
+  const [writerVerificationFilter, setWriterVerificationFilter] = useState<WriterVerificationFilter>("pending");
   const [disputedOrders, setDisputedOrders] = useState<DisputedOrder[]>([]);
   const [config, setConfig] = useState<ConfigItem[]>([]);
   const [analytics, setAnalytics] = useState({
@@ -83,21 +95,32 @@ const AdminDashboard = () => {
     if (profile?.role === "admin") {
       fetchAdminData();
     }
-  }, [profile, activeTab]);
+  }, [profile, activeTab, writerVerificationFilter]);
 
   const fetchAdminData = async () => {
     try {
       setLoading(true);
 
       if (activeTab === "verification") {
-        // Fetch writers who upload ID photo but aren't verified
-       const { data, error } = await supabase
-  .from("writer_applications")
-  .select("*")
-  .eq("status", "pending");
+        if (writerVerificationFilter === "pending") {
+          const { data, error } = await supabase
+            .from("writer_applications")
+            .select("*")
+            .eq("status", "pending");
 
-        if (error) throw error;
-        setPendingWriters(data || []);
+          if (error) throw error;
+          setPendingWriters(data || []);
+        } else {
+          const { data, error } = await supabase
+            .from("profiles")
+            .select("id, full_name, writer_status, verified, created_at")
+            .eq("role", "writer")
+            .eq("verified", true)
+            .eq("writer_status", "approved");
+
+          if (error) throw error;
+          setVerifiedWriters(data || []);
+        }
 
       } else if (activeTab === "disputes") {
         // Fetch disputed orders
@@ -126,7 +149,18 @@ const AdminDashboard = () => {
           .eq("status", "completed");
 
         const gmv = completedOrders?.reduce((acc, curr) => acc + curr.budget, 0) || 0;
-        const revenue = gmv * 0.20; // 20% flat commission rate
+
+        const { data: commissions, error: commissionError } = await supabase
+  .from("platform_commissions")
+  .select("amount");
+
+if (commissionError) throw commissionError;
+
+const revenue =
+  commissions?.reduce(
+    (total, item) => total + Number(item.amount || 0),
+    0
+  ) || 0;
 
         const { count: writersCount } = await supabase
           .from("profiles")
@@ -144,13 +178,22 @@ const AdminDashboard = () => {
           .eq("status", "disputed");
 
         const disputeRate = totalOrders ? ((disputedCount || 0) / totalOrders) * 100 : 0;
+console.log("COMPLETED ORDERS:", completedOrders);
+console.log("GMV:", gmv);
 
+console.log("COMMISSIONS:", commissions);
+console.log("REVENUE:", revenue);
+
+console.log("WRITERS COUNT:", writersCount);
+console.log("DISPUTED COUNT:", disputedCount);
+console.log("TOTAL ORDERS:", totalOrders);
         setAnalytics({
           gmv,
           revenue,
           activeWriters: writersCount || 0,
           disputeRate,
         });
+
       }
     } catch (err) {
       console.error(err);
@@ -438,51 +481,102 @@ console.log("EXISTING PROFILE:", existingProfile);
             {/* 1. WRITER VERIFICATIONS */}
             {activeTab === "verification" && (
               <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
-                <h2 className="text-xl font-bold text-white mb-6">Pending Writer Approval Queue ({pendingWriters.length})</h2>
-                {pendingWriters.length === 0 ? (
-                  <p className="text-xs text-white/40 text-center py-8">Approval queue is empty.</p>
-                ) : (
-                  <div className="grid gap-6 md:grid-cols-2">
-                    {pendingWriters.map((writer) => (
-                      <div
-                        key={writer.id}
-                        className="rounded-2xl border border-white/5 bg-white/5 p-5 flex flex-col justify-between"
-                      >
-                        <div>
-                          <h3 className="text-base font-bold text-white">{writer.full_name}</h3>
-                          <span className="text-[10px] text-white/40 block mt-1 font-mono">UID: {writer.user_id}</span>
-                          
-                          <div className="mt-4 rounded-xl bg-white/5 p-3 border border-white/5 flex items-center justify-between">
-                            <span className="text-xs text-white/60">College ID Photo</span>
-                            <a
-                              href={writer.college_id_key}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-xs text-violet-400 font-bold hover:underline flex items-center gap-1"
+                <div className="mb-6 flex flex-wrap items-center gap-3">
+                  <h2 className="text-xl font-bold text-white">
+                    {writerVerificationFilter === "pending" ? "Pending Writer Approval Queue" : "Verified Writers"}
+                  </h2>
+                  <div className="rounded-full bg-white/5 px-3 py-1 text-xs text-white/70">
+                    {writerVerificationFilter === "pending" ? pendingWriters.length : verifiedWriters.length} entries
+                  </div>
+                </div>
+
+                <div className="mb-6 flex flex-wrap gap-3">
+                  <button
+                    onClick={() => setWriterVerificationFilter("pending")}
+                    className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                      writerVerificationFilter === "pending"
+                        ? "bg-violet-500 text-white"
+                        : "bg-white/5 text-white/60 hover:bg-white/10"
+                    }`}
+                  >
+                    Pending
+                  </button>
+                  <button
+                    onClick={() => setWriterVerificationFilter("verified")}
+                    className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                      writerVerificationFilter === "verified"
+                        ? "bg-violet-500 text-white"
+                        : "bg-white/5 text-white/60 hover:bg-white/10"
+                    }`}
+                  >
+                    Verified
+                  </button>
+                </div>
+
+                {writerVerificationFilter === "pending" ? (
+                  pendingWriters.length === 0 ? (
+                    <p className="text-xs text-white/40 text-center py-8">Approval queue is empty.</p>
+                  ) : (
+                    <div className="grid gap-6 md:grid-cols-2">
+                      {pendingWriters.map((writer) => (
+                        <div
+                          key={writer.id}
+                          className="rounded-2xl border border-white/5 bg-white/5 p-5 flex flex-col justify-between"
+                        >
+                          <div>
+                            <h3 className="text-base font-bold text-white">{writer.full_name}</h3>
+                            <span className="text-[10px] text-white/40 block mt-1 font-mono">UID: {writer.user_id}</span>
+                            
+                            <div className="mt-4 rounded-xl bg-white/5 p-3 border border-white/5 flex items-center justify-between">
+                              <span className="text-xs text-white/60">College ID Photo</span>
+                              <a
+                                href={writer.college_id_key}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-xs text-violet-400 font-bold hover:underline flex items-center gap-1"
+                              >
+                                <Eye size={14} />
+                                View ID Document
+                              </a>
+                            </div>
+                          </div>
+
+                          <div className="mt-6 flex gap-3">
+                            <button
+                              onClick={() => handleApproveWriter(writer.user_id)}
+                              disabled={actionId === writer.id}
+                              className="flex-1 rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white hover:bg-emerald-500 transition-all duration-300 disabled:opacity-50 flex items-center justify-center gap-1.5"
                             >
-                              <Eye size={14} />
-                              View ID Document
-                            </a>
+                              <Check size={14} />
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => handleRejectWriter(writer.user_id)}
+                              disabled={actionId === writer.id}
+                              className="flex-1 rounded-xl border border-red-500/20 bg-red-500/5 py-3 text-xs font-bold text-red-400 hover:bg-red-500/10 transition-all duration-300 disabled:opacity-50 flex items-center justify-center gap-1.5"
+                            >
+                              <X size={14} />
+                              Reject
+                            </button>
                           </div>
                         </div>
-
-                        <div className="mt-6 flex gap-3">
-                          <button
-                            onClick={() => handleApproveWriter(writer.user_id)}
-                            disabled={actionId === writer.id}
-                            className="flex-1 rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white hover:bg-emerald-500 transition-all duration-300 disabled:opacity-50 flex items-center justify-center gap-1.5"
-                          >
-                            <Check size={14} />
-                            Approve
-                          </button>
-                          <button
-                            onClick={() => handleRejectWriter(writer.user_id)}
-                            disabled={actionId === writer.id}
-                            className="flex-1 rounded-xl border border-red-500/20 bg-red-500/5 py-3 text-xs font-bold text-red-400 hover:bg-red-500/10 transition-all duration-300 disabled:opacity-50 flex items-center justify-center gap-1.5"
-                          >
-                            <X size={14} />
-                            Reject
-                          </button>
+                      ))}
+                    </div>
+                  )
+                ) : verifiedWriters.length === 0 ? (
+                  <p className="text-xs text-white/40 text-center py-8">No verified writers found.</p>
+                ) : (
+                  <div className="grid gap-6 md:grid-cols-2">
+                    {verifiedWriters.map((writer) => (
+                      <div
+                        key={writer.id}
+                        className="rounded-2xl border border-white/5 bg-white/5 p-5"
+                      >
+                        <h3 className="text-base font-bold text-white">{writer.full_name}</h3>
+                        <span className="text-[10px] text-white/40 block mt-1 font-mono">UID: {writer.id}</span>
+                        <div className="mt-4 flex flex-wrap gap-2 text-xs text-white/60">
+                          <span className="rounded-full bg-emerald-500/10 px-2 py-1">Verified</span>
+                          <span className="rounded-full bg-white/5 px-2 py-1">{writer.writer_status || "writer"}</span>
                         </div>
                       </div>
                     ))}

@@ -184,41 +184,125 @@ if (error) {
 }
 
 /* ----------------------------- */
-/* CREATE PAYMENT RECORD */
+/* CREATE RAZORPAY ORDER & COLLECT PAYMENT (ESCROW) */
 /* ----------------------------- */
+try {
+  const loadRazorpayScript = async () => {
+    return new Promise<boolean>((resolve) => {
+      if ((window as any).Razorpay) return resolve(true);
+      const script = document.createElement("script");
+      script.src = "https://checkout.razorpay.com/v1/checkout.js";
+      script.onload = () => resolve(true);
+      script.onerror = () => resolve(false);
+      document.body.appendChild(script);
+    });
+  };
 
-const { error: paymentError } = await supabase
-  .from("payments")
-  .insert([
-    {
-      assignment_id: assignment.id,
-      user_id: user.id,
-      type: "assignment",
-      amount: calculatedPrice,
-      status: "pending",
-      method: "escrow",
-    },
-  ]);
+  const loaded = await loadRazorpayScript();
+  if (!loaded || !(window as any).Razorpay) {
+    alert("Assignment created but Razorpay checkout couldn't be loaded. You can retry payment from My Orders.");
+  } else {
+    const paymentServerBaseUrl =
+      import.meta.env.VITE_PAYMENT_VERIFY_URL
+        ? import.meta.env.VITE_PAYMENT_VERIFY_URL.replace(/\/verify-payment\/?$/i, "")
+        : "http://localhost:3000";
 
-if (paymentError) {
-  console.log(paymentError);
-  alert("Payment record creation failed.");
-  return;
+    const createOrderUrl = `${paymentServerBaseUrl}/create-order`;
+    const verifyUrl = `${paymentServerBaseUrl}/verify-payment`;
+
+    const createOrderPayload = {
+      amount: calculatedPrice * 100,
+      currency: "INR",
+      receipt: assignment.id,
+      notes: {
+        assignment_id: assignment.id,
+        customer_id: user.id,
+      },
+    };
+
+    const createOrderResponse = await fetch(createOrderUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(createOrderPayload),
+    });
+
+    const createOrderResult = await createOrderResponse.json();
+    if (!createOrderResponse.ok) {
+      console.error(createOrderResult);
+      alert("Assignment created but payment could not be initialized. Please try paying from My Orders.");
+    } else {
+      const orderId = createOrderResult.order_id;
+
+      const options = {
+        key: import.meta.env.VITE_RAZORPAY_KEY,
+        amount: calculatedPrice * 100,
+        currency: "INR",
+        order_id: orderId,
+        name: "NoteMate",
+        description: assignment.title,
+        handler: async function (response: any) {
+          if (!response?.razorpay_payment_id) {
+            alert("Payment was not completed.");
+            return;
+          }
+
+          const verifyBody = {
+            assignment_id: assignment.id,
+            user_id: user.id,
+            razorpay_order_id: response.razorpay_order_id,
+            razorpay_payment_id: response.razorpay_payment_id,
+            razorpay_signature: response.razorpay_signature,
+          };
+
+          const verifyResponse = await fetch(verifyUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(verifyBody),
+          });
+
+          const verifyResult = await verifyResponse.json();
+          if (!verifyResponse.ok) {
+            console.error(verifyResult);
+            alert("Payment verification failed. Please try again from My Orders.");
+            return;
+          }
+
+          alert("Payment successful! Your assignment is now live and visible to writers.");
+
+          /* Reset */
+          setTitle("");
+          setSubject("");
+          setDescription("");
+          setPages("");
+          setDeadline("");
+          setUrgency("normal");
+          setSubjectType("standard");
+          setDeliveryMode("digital");
+          setFiles([]);
+        },
+        prefill: {
+          name: user?.user_metadata?.full_name || "",
+          email: user?.email || "",
+        },
+        notes: {
+          assignment_id: assignment.id,
+          customer_id: user.id,
+        },
+        theme: { color: "#7c3aed" },
+      };
+
+      const rzp = new (window as any).Razorpay(options);
+      rzp.on("payment.failed", (resp: any) => {
+        console.error("Razorpay payment failed", resp);
+        alert("Payment failed. You can retry from My Orders.");
+      });
+      rzp.open();
+    }
+  }
+} catch (err) {
+  console.error(err);
+  alert("An error occurred while initializing payment. You can complete payment from My Orders.");
 }
-
-
-      alert("Assignment submitted successfully! Please proceed to pay from My Orders.");
-
-      /* Reset */
-      setTitle("");
-      setSubject("");
-      setDescription("");
-      setPages("");
-      setDeadline("");
-      setUrgency("normal");
-      setSubjectType("standard");
-      setDeliveryMode("digital");
-      setFiles([]);
 
     } catch (error) {
       console.log(error);

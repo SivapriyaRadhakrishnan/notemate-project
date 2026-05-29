@@ -58,8 +58,11 @@ export default defineConfig([
       // Other configs...
       // Enable lint rules for React
       reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
+      // Alternatively, use this for stricter rules
+      tseslint.configs.strictTypeChecked,
+      // Optionally, add this for stylistic rules
+      tseslint.configs.stylisticTypeChecked,
+      // Other configs...
     ],
     languageOptions: {
       parserOptions: {
@@ -71,3 +74,11 @@ export default defineConfig([
   },
 ])
 ```
+
+## Payment verification server
+
+A small server is included to verify Razorpay checkout responses before the application updates Supabase.
+
+- Run with: `npm run server`
+- Required env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `RAZORPAY_SECRET`
+- Frontend uses `VITE_PAYMENT_VERIFY_URL` to call the endpoint, defaulting to `http://localhost:3000/verify-payment`.
