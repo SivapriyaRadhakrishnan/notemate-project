@@ -78,8 +78,8 @@ const DashboardHome = () => {
         const { data: feedData, error: feedError } = await supabase
           .from("assignments")
           .select("*")
-          .eq("status", "pending")
-          .eq("payment_status", "held")
+          .eq("status", "open")
+          .eq("payment_status", "escrow_held")
           .order("created_at", { ascending: false });
 
         if (feedError) console.error(feedError);
@@ -140,7 +140,7 @@ const DashboardHome = () => {
         
         // Sum budget for assignments that are paid or active
         const budget = assignmentsData.reduce(
-          (acc, item) => acc + (item.payment_status === "held" || item.payment_status === "released" ? item.budget : 0),
+          (acc, item) => acc + (item.payment_status === "escrow_held" || item.payment_status === "released" ? item.budget : 0),
           0
         );
 
@@ -273,10 +273,10 @@ await updateAssignmentStatus(assignment.id, "accepted");
     try {
       setActionLoadingId(assignment.id);
 
-      const { error } = await supabase
+        const { error } = await supabase
         .from("assignments")
         .update({
-          status: "ready",
+          status: "ready_for_review",
           delivered_at: new Date().toISOString(),
         })
         .eq("id", assignment.id);
@@ -464,7 +464,7 @@ await updateAssignmentStatus(assignment.id, "accepted");
                                     ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
                                     : item.status === "in_progress"
                                     ? "bg-violet-500/10 text-violet-400 border border-violet-500/20"
-                                    : item.status === "ready"
+                                    : item.status === "ready_for_review"
                                     ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
                                     : "bg-red-500/10 text-red-400 border border-red-500/20"
                                 }`}
@@ -525,7 +525,7 @@ await updateAssignmentStatus(assignment.id, "accepted");
                               Chat
                             </button>
 
-                            {item.status !== "ready" && (
+                            {item.status !== "ready_for_review" && (
                               <button
                                 onClick={() => markAsDelivered(item)}
                                 disabled={actionLoadingId === item.id}

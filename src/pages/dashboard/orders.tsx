@@ -9,7 +9,6 @@ import {
   Trash2,
   Eye,
   Pencil,
-  CreditCard,
   CheckCircle2,
   AlertTriangle,
   X,
@@ -381,7 +380,7 @@ const Orders = () => {
       // Release escrowed payment and record commission.
       await releasePaymentToWriter(reviewingAssignment.id, writerId);
 
-      // 4. Create review entry
+      // Create review entry
       const { error: reviewError } = await supabase.from("reviews").insert([
         {
           assignment_id: reviewingAssignment.id,
@@ -397,46 +396,31 @@ const Orders = () => {
 
       if (reviewError) {
         alert("Failed to submit review: " + reviewError.message);
-        setReviewLoading(false);
         return;
       }
 
-      // 5. Recalculate average rating of writer
-      const { data: writerProfile, error: writerProfileError } = await supabase
-        .from("profiles")
-        .select("rating, rating_count")
-        .eq("id", writerId)
-        .single();
+      // Recalculate writer rating from all reviews
+      const { data: reviews, error: reviewsError } = await supabase
+        .from("reviews")
+        .select("rating_overall")
+        .eq("reviewee_id", writerId);
 
-      if (writerProfileError) {
-        alert("Failed to refresh writer rating: " + writerProfileError.message);
-        setReviewLoading(false);
-        return;
+      if (reviewsError) {
+        console.error("Failed to fetch reviews:", reviewsError);
+      } else if (reviews?.length) {
+        const avgRating =
+          reviews.reduce((sum, r) => sum + (r.rating_overall || 0), 0) /
+          reviews.length;
+
+        await supabase
+          .from("profiles")
+          .update({
+            rating: Number(avgRating.toFixed(1)),
+            rating_count: reviews.length,
+          })
+          .eq("id", writerId);
       }
 
-      const newRatingCount = (writerProfile?.rating_count || 0) + 1;
-      const currentRatingSum = (writerProfile?.rating || 0) * (writerProfile?.rating_count || 0);
-      const newAverageRating = (currentRatingSum + ratingOverall) / newRatingCount;
-
-      await supabase
-        .from("profiles")
-        .update({
-          rating: Number(newAverageRating.toFixed(2)),
-          rating_count: newRatingCount,
-        })
-        .eq("id", writerId);
-
-      // 6. Update Assignment Status to Completed
-      await supabase
-        .from("assignments")
-        .update({
-          status: "completed",
-          payment_status: "released",
-          completed_at: new Date().toISOString(),
-        })
-        .eq("id", reviewingAssignment.id);
-
-      // 7. Add notification for the writer
       await supabase.from("notifications").insert([
         {
           user_id: writerId,
@@ -556,7 +540,7 @@ const Orders = () => {
                         ? "bg-blue-500/10 text-blue-400"
                         : item.status === "in_progress"
                         ? "bg-violet-500/10 text-violet-400"
-                        : item.status === "ready"
+                        : item.status === "ready_for_review"
                         ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
                         : item.status === "completed"
                         ? "bg-ziAnc-500/10 text-zinc-400"
@@ -603,7 +587,7 @@ const Orders = () => {
                     <span className="text-white/40">Escrow Ledger</span>
                     <span
                       className={`rounded-lg px-2 py-1 text-[10px] font-semibold border ${
-                        item.payment_status === "held"
+                        item.payment_status === "escrow_held"
                           ? "bg-violet-500/10 text-violet-300 border-violet-500/20"
                           : item.payment_status === "released"
                           ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/20"
@@ -612,7 +596,7 @@ const Orders = () => {
                           : "bg-yellow-500/10 text-yellow-300 border-yellow-500/20"
                       }`}
                     >
-                      {item.payment_status === "held" && "Escrow Held"}
+                      {item.payment_status === "escrow_held" && "Escrow Held"}
                       {item.payment_status === "released" && "Released"}
                       {item.payment_status === "refunded" && "Refunded"}
                       {item.payment_status === "pending" && "Payment Pending"}
@@ -623,19 +607,7 @@ const Orders = () => {
 
               {/* Bottom Actions */}
               <div className="mt-8 pt-4 border-t border-white/5 space-y-3">
-                {/* 1. Pay Now Button for Unpaid Orders */}
-                {isCustomer && item.payment_status === "pending" && (
-                  <button
-                    onClick={() => {
-                      setPayingAssignment(item);
-                      setCheckoutOpen(true);
-                    }}
-                    className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 py-3 text-sm font-bold text-white shadow-lg shadow-orange-500/20 hover:opacity-90 transition-all duration-300"
-                  >
-                    <CreditCard size={16} />
-                    Pay Upfront (₹{item.budget})
-                  </button>
-                )}
+                {/* 1. Pay Now Button removed — payments are collected at assignment creation */}
 
                 {/* 2. Chat with Writer if Accepted */}
                 {item.writer_id && (
@@ -649,7 +621,7 @@ const Orders = () => {
                 )}
 
                 {/* 3. Confirm Delivery Actions (When writer submits proof / Ready) */}
-                {isCustomer && item.status === "ready" && (
+                {isCustomer && item.status === "ready_for_review" && (
                   <div className="grid grid-cols-2 gap-3">
                     <button
                       onClick={() => confirmDelivery(item)}
@@ -750,14 +722,14 @@ const Orders = () => {
 
             <div className="rounded-2xl bg-white/5 p-4 border border-white/5 mb-6">
               <p className="text-xs text-white/50">Paying for:</p>
-              <h4 className="text-base font-bold text-white mt-1">{payingAssignment.title}</h4>
+              <h4 className="text-base font-bold text-white mt-1">{payingAssignment?.title}</h4>
               <div className="flex justify-between mt-3 text-xs border-t border-white/5 pt-3">
                 <span className="text-white/40">Order ID:</span>
-                <span className="text-white font-mono">{payingAssignment.id.slice(0, 13)}</span>
+                <span className="text-white font-mono">{payingAssignment?.id?.slice(0, 13)}</span>
               </div>
               <div className="flex justify-between mt-1.5 text-xs">
                 <span className="text-white/40">Amount:</span>
-                <span className="text-violet-400 font-bold">₹{payingAssignment.budget}</span>
+                <span className="text-violet-400 font-bold">₹{payingAssignment?.budget}</span>
               </div>
             </div>
 
@@ -857,7 +829,7 @@ const Orders = () => {
               ) : (
                 <>
                   <CheckCircle2 size={16} />
-                  Pay with Razorpay (₹{payingAssignment.budget})
+                  Pay with Razorpay (₹{payingAssignment?.budget})
                 </>
               )}
             </button>

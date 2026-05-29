@@ -35,7 +35,7 @@ export async function uploadAssignmentFiles(
 export async function updateAssignmentStatus(
 
     assignmentId: string,
-    status: "pending" | "accepted" | "in_progress" | "ready" | "completed" | "cancelled" | "disputed"
+    status: "draft" | "pending" | "open" | "accepted" | "in_progress" | "ready_for_review" | "completed" | "cancelled" | "disputed" | "refunded"
 ): Promise<void> {
     console.log("UPDATE ASSIGNMENT STATUS RUNNING");
     console.log("STATUS:", status);
@@ -44,7 +44,7 @@ export async function updateAssignmentStatus(
     if (status === "accepted") {
         timestamps.accepted_at = new Date().toISOString();
         console.log("ACCEPTED STATUS BLOCK RUNNING");
-    } else if (status === "ready") {
+    } else if (status === "ready_for_review") {
         timestamps.delivered_at = new Date().toISOString();
     } else if (status === "completed") {
         timestamps.completed_at = new Date().toISOString();
@@ -89,7 +89,7 @@ export async function updateAssignmentProofs(
         .from("assignments")
         .update({
             [fieldName]: proofUrls,
-            status: type === "final" ? "ready" : "in_progress",
+            status: type === "final" ? "ready_for_review" : "in_progress",
         })
         .eq("id", assignmentId);
 

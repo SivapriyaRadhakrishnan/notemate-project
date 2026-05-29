@@ -111,10 +111,8 @@ app.post("/verify-payment", async (req, res) => {
       return res.status(500).json({ error: paymentInsertError.message });
     }
 
-    const updatePayload = { payment_status: "held" };
-    if (!assignment.status || assignment.status === "pending") {
-      updatePayload.status = "pending";
-    }
+    // Mark payment as held in escrow and open the assignment for writers
+    const updatePayload = { payment_status: "escrow_held", status: "open" };
 
     const { error: assignmentUpdateError } = await supabase
       .from("assignments")

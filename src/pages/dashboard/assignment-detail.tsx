@@ -155,7 +155,7 @@ const AssignmentDetail = ({ role }: { role: "customer" | "writer" }) => {
       const allFinal = [...existingFinal, ...finalUrls];
       
       await updateAssignmentProofs(assignment.id, allFinal, "final");
-      await updateAssignmentStatus(assignment.id, "ready");
+      await updateAssignmentStatus(assignment.id, "ready_for_review");
 
       // Notify customer
      await createNotification({
@@ -203,7 +203,7 @@ const AssignmentDetail = ({ role }: { role: "customer" | "writer" }) => {
         return;
       }
 
-      if (assignment.payment_status === "held") {
+      if (assignment.payment_status === "escrow_held") {
         await releasePaymentToWriter(
           assignment.id,
           assignment.writer_id || ""
@@ -351,19 +351,39 @@ const AssignmentDetail = ({ role }: { role: "customer" | "writer" }) => {
       setActionLoading(true);
 
       const { error } = await supabase.from("reviews").insert([
-        {
-          assignment_id: assignment.id,
-          reviewer_id: session.user.id,
-          reviewee_id: assignment.writer_id,
-          rating_overall: ratingOverall,
-          rating_handwriting: ratingOverall,
-          rating_speed: ratingOverall,
-          rating_accuracy: ratingOverall,
-          review: reviewText,
-        },
-      ]);
+  {
+    assignment_id: assignment.id,
+    reviewer_id: session.user.id,
+    reviewee_id: assignment.writer_id,
+    rating_overall: ratingOverall,
+    rating_handwriting: ratingOverall,
+    rating_speed: ratingOverall,
+    rating_accuracy: ratingOverall,
+    review: reviewText,
+  },
+]);
 
-      if (error) throw error;
+if (error) throw error;
+
+// Recalculate writer rating
+const { data: reviews } = await supabase
+  .from("reviews")
+  .select("rating_overall")
+  .eq("reviewee_id", assignment.writer_id);
+
+if (reviews?.length) {
+  const avgRating =
+    reviews.reduce((sum, r) => sum + (r.rating_overall || 0), 0) /
+    reviews.length;
+
+  await supabase
+    .from("profiles")
+    .update({
+      rating: Number(avgRating.toFixed(1)),
+      rating_count: reviews.length,
+    })
+    .eq("id", assignment.writer_id);
+}
 
       alert("Review submitted successfully!");
       setShowReview(false);
@@ -612,7 +632,7 @@ const AssignmentDetail = ({ role }: { role: "customer" | "writer" }) => {
         <section className="rounded-3xl border border-white/10 bg-white/5 p-6 space-y-4">
           <h2 className="text-xl font-black text-white">Your Actions</h2>
 
-          {assignment.status === "ready" && (
+          {assignment.status === "ready_for_review" && (
             <div className="space-y-4">
               {/* Download Files */}
               {assignment.final_proof_keys && assignment.final_proof_keys.length > 0 && (
