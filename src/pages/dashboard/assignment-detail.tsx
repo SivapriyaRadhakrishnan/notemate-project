@@ -25,7 +25,11 @@ import {
   createNotification,
   formatFileName,
 } from "../../lib/assignment-utils";
-
+declare global {
+  interface Window {
+    Razorpay: any;
+  }
+}
 interface Assignment {
   id: string;
   title: string;
@@ -173,32 +177,167 @@ const AssignmentDetail = ({ role }: { role: "customer" | "writer" }) => {
     }
   };
 
+  const loadRazorpayScript = async () => {
+    return new Promise<boolean>((resolve) => {
+      if ((window as any).Razorpay) {
+        return resolve(true);
+      }
+
+      const script = document.createElement("script");
+      script.src = "https://checkout.razorpay.com/v1/checkout.js";
+      script.onload = () => resolve(true);
+      script.onerror = () => resolve(false);
+      document.body.appendChild(script);
+    });
+  };
+
   // Customer: Confirm delivery and release payment
   const handleConfirmDelivery = async () => {
-    if (!assignment || !session?.user.id) return;
+    if (!assignment) return;
 
     try {
       setActionLoading(true);
 
-      // Release payment to writer
-      await releasePaymentToWriter(assignment.id, assignment.writer_id || "", assignment.user_id);
+      if (assignment.payment_status === "released") {
+        alert("Payment has already been released for this assignment.");
+        return;
+      }
 
-      // Update assignment status
-      await updateAssignmentStatus(assignment.id, "completed");
+      if (assignment.payment_status === "held") {
+        await releasePaymentToWriter(
+          assignment.id,
+          assignment.writer_id || ""
+        );
 
-      // Notify writer
-     await createNotification({
-  userId: assignment.writer_id || "",
-  assignmentId: assignment.id,
-  type: "payment_released",
-  title: "Payment Released",
-  message: `Customer confirmed delivery for "${assignment.title}". Payment released to your wallet!`,
-});
+        await createNotification({
+          userId: assignment.writer_id || "",
+          assignmentId: assignment.id,
+          type: "payment_released",
+          title: "Payment Released",
+          message: `Customer confirmed delivery for "${assignment.title}". Payment released to your wallet!`,
+        });
 
-      alert("Delivery confirmed! Payment released to writer.");
-      await fetchAssignment();
+        alert("Payment released to the writer.");
+        await fetchAssignment();
+        return;
+      }
+
+      const loaded = await loadRazorpayScript();
+      if (!loaded || !(window as any).Razorpay) {
+        alert("Unable to load Razorpay checkout. Please check your connection.");
+        return;
+      }
+
+      const paymentServerBaseUrl =
+        import.meta.env.VITE_PAYMENT_VERIFY_URL
+          ? import.meta.env.VITE_PAYMENT_VERIFY_URL.replace(/\/verify-payment\/?$/i, "")
+          : "http://localhost:3000";
+
+      const createOrderUrl = `${paymentServerBaseUrl}/create-order`;
+      const verifyUrl = `${paymentServerBaseUrl}/verify-payment`;
+
+      const createOrderPayload = {
+        amount: assignment.budget * 100,
+        currency: "INR",
+        receipt: assignment.id,
+        notes: {
+          assignment_id: assignment.id,
+          customer_id: session?.user.id,
+        },
+      };
+
+      console.log("[assignment-detail.tsx] Create order request:", createOrderUrl, createOrderPayload);
+
+      const createOrderResponse = await fetch(createOrderUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(createOrderPayload),
+      });
+
+      const createOrderResult = await createOrderResponse.json();
+      console.log("[assignment-detail.tsx] Create order response:", createOrderResponse.status, createOrderResult);
+
+      if (!createOrderResponse.ok) {
+        throw new Error(createOrderResult?.error || "Unable to create Razorpay order.");
+      }
+
+      const orderId = createOrderResult.order_id;
+
+      const options = {
+        key: import.meta.env.VITE_RAZORPAY_KEY,
+        amount: assignment.budget * 100,
+        currency: "INR",
+        order_id: orderId,
+        name: "NoteMate",
+        description: assignment.title,
+        handler: async function (response: any) {
+          console.log("RAZORPAY RESPONSE", response);
+          if (!response?.razorpay_payment_id) {
+            alert("Payment was not completed.");
+            return;
+          }
+
+          const verifyBody = {
+            assignment_id: assignment.id,
+            user_id: session?.user.id,
+            razorpay_order_id: response.razorpay_order_id,
+            razorpay_payment_id: response.razorpay_payment_id,
+            razorpay_signature: response.razorpay_signature,
+          };
+
+            console.log("[assignment-detail.tsx] Verify payment request:", verifyUrl, verifyBody);
+
+          const verifyResponse = await fetch(verifyUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+              body: JSON.stringify(verifyBody),
+          });
+
+          const verifyResult = await verifyResponse.json();
+            console.log("[assignment-detail.tsx] Verify payment response:", verifyResponse.status, verifyResult);
+          if (!verifyResponse.ok) {
+            throw new Error(
+              verifyResult?.error || "Payment verification failed."
+            );
+          }
+
+          await releasePaymentToWriter(
+            assignment.id,
+            assignment.writer_id || ""
+          );
+
+          await createNotification({
+            userId: assignment.writer_id || "",
+            assignmentId: assignment.id,
+            type: "payment_released",
+            title: "Payment Released",
+            message: `Customer confirmed delivery for "${assignment.title}". Payment released to your wallet!`,
+          });
+
+          alert("Payment successful!");
+          await fetchAssignment();
+        },
+        prefill: {
+          name: profile?.full_name || "",
+          email: session?.user.email || "",
+        },
+        notes: {
+          assignment_id: assignment.id,
+          customer_id: session?.user.id,
+        },
+        theme: {
+          color: "#10b981",
+        },
+      };
+
+      const razor = new window.Razorpay(options);
+      razor.open();
     } catch (err: any) {
-      alert(err.message || "Failed to confirm delivery.");
+      alert(err.message || "Unable to process payment.");
     } finally {
       setActionLoading(false);
     }

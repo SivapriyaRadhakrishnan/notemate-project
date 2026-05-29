@@ -91,6 +91,14 @@ const Login = () => {
         return;
       }
 
+      if (!user.email_confirmed_at) {
+        alert(
+          "Please verify your email before logging in. Check your inbox for the verification link."
+        );
+        navigate("/verify-email");
+        return;
+      }
+
       /* FETCH PROFILE */
 
       const {

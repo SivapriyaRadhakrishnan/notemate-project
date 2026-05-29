@@ -142,8 +142,7 @@ export async function getPaymentBreakdown(assignmentId: string) {
  */
 export async function releasePaymentToWriter(
     assignmentId: string,
-    writerId: string,
-    customerId: string
+    writerId: string
 ): Promise<void> {
     try {
         // GET ASSIGNMENT
@@ -164,12 +163,9 @@ export async function releasePaymentToWriter(
 
         // CALCULATE PAYMENT
         const budget = Number(assignment.budget || 0);
-
-        const commissionRate = 0.2;
-
+        const commissionRate =  Number(assignment.commission_rate || 20) / 100;
         const commissionAmount = Math.round(budget * commissionRate * 100) / 100;
-
-        const writerAmount = budget - commissionAmount;
+        const writerAmount =  Math.round((budget - commissionAmount) * 100) / 100;
 
         // GET WRITER PROFILE
         const { data: writerProfile, error: writerFetchError } = await supabase
@@ -179,6 +175,7 @@ export async function releasePaymentToWriter(
             .maybeSingle();
         console.log("WRITER ID:", writerId);
         console.log("WRITER PROFILE:", writerProfile);
+        
         if (writerFetchError) {
             console.log("WRITER FETCH ERROR:", writerFetchError);
             throw writerFetchError;
@@ -192,19 +189,33 @@ export async function releasePaymentToWriter(
         const currentBalance = Number(writerProfile.available_balance || 0);
 
         const newBalance = currentBalance + writerAmount;
+        console.log("CURRENT BALANCE:", currentBalance);
+console.log("WRITER AMOUNT:", writerAmount);
+console.log("NEW BALANCE:", newBalance);
 
-        const { error: writerUpdateError } = await supabase
-            .from("profiles")
-            .update({
-                available_balance: newBalance,
-            })
-            .eq("id", writerId);
+       const { data: updatedProfile, error: writerUpdateError } = await supabase
+    .from("profiles")
+    .update({
+        available_balance: newBalance,
+    })
+    .eq("id", writerId)
+    .select();
+
+console.log("UPDATED PROFILE:", updatedProfile);
+
+const { data: verifyProfile } = await supabase
+    .from("profiles")
+    .select("id, available_balance")
+    .eq("id", writerId)
+    .single();
+
+console.log("PROFILE AFTER UPDATE:", verifyProfile);
 
         if (writerUpdateError) {
             console.log("WRITER UPDATE ERROR:", writerUpdateError);
             throw writerUpdateError;
         }
-
+console.log("WRITER BALANCE UPDATED SUCCESSFULLY");
         // INSERT PAYMENT RECORD
         const { error: paymentInsertError } = await supabase
             .from("payments")
@@ -219,6 +230,20 @@ export async function releasePaymentToWriter(
         if (paymentInsertError) {
             console.log("PAYMENT INSERT ERROR:", paymentInsertError);
             throw paymentInsertError;
+        }
+
+        // INSERT PLATFORM COMMISSION AUDIT
+        const { error: commissionInsertError } = await supabase
+            .from("platform_commissions")
+            .insert({
+                assignment_id: assignmentId,
+                amount: commissionAmount,
+                commission_rate: commissionRate,
+            });
+
+        if (commissionInsertError) {
+            console.log("COMMISSION INSERT ERROR:", commissionInsertError);
+            throw commissionInsertError;
         }
 
         // UPDATE ASSIGNMENT
@@ -316,7 +341,7 @@ export async function getAssignmentWithDetails(assignmentId: string) {
 /**
  * Check if file can be downloaded (delivery mode specific)
  */
-export function canDownloadDelivery(deliveryMode: string, customerRole?: string): boolean {
+export function canDownloadDelivery(deliveryMode: string): boolean {
     if (deliveryMode === "digital") {
         return true;
     }

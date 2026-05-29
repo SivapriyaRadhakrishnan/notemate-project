@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 
 import { supabase } from "../../supabase/client";
+import { releasePaymentToWriter } from "../../lib/assignment-utils";
 
 import {
   CalendarDays,
@@ -63,6 +64,20 @@ const Orders = () => {
   const [cardExpiry, setCardExpiry] = useState("");
   const [cardCvv, setCardCvv] = useState("");
   const [paymentLoading, setPaymentLoading] = useState(false);
+  const razorpayKey = import.meta.env.VITE_RAZORPAY_KEY_ID;
+
+  const loadRazorpayScript = async () => {
+    return new Promise<boolean>((resolve) => {
+      if ((window as any).Razorpay) {
+        return resolve(true);
+      }
+      const script = document.createElement("script");
+      script.src = "https://checkout.razorpay.com/v1/checkout.js";
+      script.onload = () => resolve(true);
+      script.onerror = () => resolve(false);
+      document.body.appendChild(script);
+    });
+  };
 
   // Review Modal States
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -193,11 +208,16 @@ const Orders = () => {
   };
 
   /* ----------------------------- */
-  /* SIMULATE PAYMENT SUCCESS */
+  /* RAZORPAY PAYMENT CHECKOUT */
   /* ----------------------------- */
 
   const handleSimulatePayment = async () => {
     if (!payingAssignment) return;
+
+    if (!razorpayKey) {
+      alert("Razorpay is not configured. Please set VITE_RAZORPAY_KEY_ID.");
+      return;
+    }
 
     try {
       setPaymentLoading(true);
@@ -208,61 +228,123 @@ const Orders = () => {
 
       if (!user) return;
 
-      const rzpayOrderId = `rzp_order_${Math.random().toString(36).substring(7)}`;
-      const rzpayPaymentId = `rzp_pay_${Math.random().toString(36).substring(7)}`;
+      const loaded = await loadRazorpayScript();
+      if (!loaded || !(window as any).Razorpay) {
+        alert("Unable to load Razorpay checkout. Please check your connection.");
+        return;
+      }
 
-      // 1. Insert payment record
-      const { error: paymentError } = await supabase.from("payments").insert([
-        {
+      const paymentServerBaseUrl =
+        import.meta.env.VITE_PAYMENT_VERIFY_URL
+          ? import.meta.env.VITE_PAYMENT_VERIFY_URL.replace(/\/verify-payment\/?$/i, "")
+          : "http://localhost:3000";
+
+      const createOrderUrl = `${paymentServerBaseUrl}/create-order`;
+      const verifyUrl = `${paymentServerBaseUrl}/verify-payment`;
+
+      const createOrderPayload = {
+        amount: payingAssignment.budget * 100,
+        currency: "INR",
+        receipt: payingAssignment.id,
+        notes: {
           assignment_id: payingAssignment.id,
-          user_id: user.id,
-          amount: payingAssignment.budget,
-          type: "payment",
-          status: "success",
-          razorpay_order_id: rzpayOrderId,
-          razorpay_payment_id: rzpayPaymentId,
+          customer_id: user.id,
         },
-      ]);
+      };
 
-      if (paymentError) {
-        alert("Payment recording failed: " + paymentError.message);
-        setPaymentLoading(false);
-        return;
+      console.log("[orders.tsx] Create order request:", createOrderUrl, createOrderPayload);
+
+      const createOrderResponse = await fetch(createOrderUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(createOrderPayload),
+      });
+
+      const createOrderResult = await createOrderResponse.json();
+      console.log("[orders.tsx] Create order response:", createOrderResponse.status, createOrderResult);
+
+      if (!createOrderResponse.ok) {
+        throw new Error(createOrderResult?.error || "Unable to create Razorpay order.");
       }
 
-      // 2. Update assignment status to Pending (ready for writers to pick up) and payment_status to held
-      const { error: assignmentError } = await supabase
-        .from("assignments")
-        .update({
-          payment_status: "held",
-          status: "pending",
-        })
-        .eq("id", payingAssignment.id);
+      const orderId = createOrderResult.order_id;
 
-      if (assignmentError) {
-        alert("Updating assignment failed: " + assignmentError.message);
-        setPaymentLoading(false);
-        return;
-      }
+      const options = {
+        key: razorpayKey,
+        amount: payingAssignment.budget * 100,
+        currency: "INR",
+        order_id: orderId,
+        name: "NoteMate",
+        description: `Payment for ${payingAssignment.title}`,
+        image: "",
+        handler: async (response: any) => {
+          if (!response?.razorpay_payment_id) {
+            alert("Payment was not completed.");
+            return;
+          }
 
-      // 3. Log a notification trigger for writers
-      await supabase.from("notifications").insert([
-        {
-          user_id: user.id,
-          title: "Payment Held in Escrow",
-          message: `Your payment of ₹${payingAssignment.budget} for "${payingAssignment.title}" is held in escrow. Writers have been notified!`,
-          read: false,
+          try {
+            const verifyBody = {
+              assignment_id: payingAssignment.id,
+              user_id: user.id,
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+            };
+
+              console.log("[orders.tsx] Verify payment request:", verifyUrl, verifyBody);
+
+            const verifyResponse = await fetch(verifyUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+                body: JSON.stringify(verifyBody),
+            });
+
+            const verifyResult = await verifyResponse.json();
+              console.log("[orders.tsx] Verify payment response:", verifyResponse.status, verifyResult);
+            if (!verifyResponse.ok) {
+              throw new Error(verifyResult?.error || "Payment verification failed.");
+            }
+
+            alert("Payment successful! Funds are now securely held in escrow.");
+            setCheckoutOpen(false);
+            setPayingAssignment(null);
+            fetchAssignments();
+          } catch (paymentErr: any) {
+            console.error(paymentErr);
+            alert("Payment processing failed: " + (paymentErr?.message || "Please try again."));
+          } finally {
+            setPaymentLoading(false);
+          }
         },
-      ]);
+        prefill: {
+          name: profile?.full_name || "",
+          email: user.email || "",
+        },
+        notes: {
+          assignment_id: payingAssignment.id,
+          customer_id: user.id,
+        },
+        theme: {
+          color: "#7c3aed",
+        },
+      };
 
-      alert("Payment successful! Funds are now securely held in escrow.");
-      setCheckoutOpen(false);
-      setPayingAssignment(null);
-      fetchAssignments();
+      const rzp = new (window as any).Razorpay(options);
+      rzp.on("payment.failed", (response: any) => {
+        console.error("Razorpay payment failed", response);
+        alert("Payment failed. Please try again.");
+        setPaymentLoading(false);
+      });
+      rzp.open();
+      setPaymentLoading(false);
     } catch (err) {
       console.log(err);
-      alert("Payment simulation failed.");
-    } finally {
+      alert("Payment checkout could not be opened.");
       setPaymentLoading(false);
     }
   };
@@ -296,50 +378,8 @@ const Orders = () => {
       const writerId = reviewingAssignment.writer_id;
       if (!writerId) return;
 
-      // 1. Calculate writer earnings (80% of final price)
-      const commissionRate = 0.2; // 20%
-      const writerEarnings = reviewingAssignment.budget * (1 - commissionRate);
-
-      // 2. Release Escrow: Update available balance of the writer
-      // First fetch the writer's profile
-      const { data: writerProfile, error: writerFetchError } = await supabase
-        .from("profiles")
-        .select("available_balance, rating, rating_count")
-        .eq("id", writerId)
-        .single();
-
-      if (writerFetchError) {
-        alert("Failed to find writer profile: " + writerFetchError.message);
-        setReviewLoading(false);
-        return;
-      }
-
-      const currentBalance = Number(writerProfile?.available_balance || 0);
-      const newBalance = currentBalance + writerEarnings;
-
-      const { error: balanceUpdateError } = await supabase
-        .from("profiles")
-        .update({
-          available_balance: newBalance,
-        })
-        .eq("id", writerId);
-
-      if (balanceUpdateError) {
-        alert("Failed to release earnings to writer: " + balanceUpdateError.message);
-        setReviewLoading(false);
-        return;
-      }
-
-      // 3. Record Payout/Escrow release payment transaction
-      await supabase.from("payments").insert([
-        {
-          assignment_id: reviewingAssignment.id,
-          user_id: writerId,
-          amount: writerEarnings,
-          type: "payout",
-          status: "success",
-        },
-      ]);
+      // Release escrowed payment and record commission.
+      await releasePaymentToWriter(reviewingAssignment.id, writerId);
 
       // 4. Create review entry
       const { error: reviewError } = await supabase.from("reviews").insert([
@@ -362,6 +402,18 @@ const Orders = () => {
       }
 
       // 5. Recalculate average rating of writer
+      const { data: writerProfile, error: writerProfileError } = await supabase
+        .from("profiles")
+        .select("rating, rating_count")
+        .eq("id", writerId)
+        .single();
+
+      if (writerProfileError) {
+        alert("Failed to refresh writer rating: " + writerProfileError.message);
+        setReviewLoading(false);
+        return;
+      }
+
       const newRatingCount = (writerProfile?.rating_count || 0) + 1;
       const currentRatingSum = (writerProfile?.rating || 0) * (writerProfile?.rating_count || 0);
       const newAverageRating = (currentRatingSum + ratingOverall) / newRatingCount;
@@ -389,7 +441,7 @@ const Orders = () => {
         {
           user_id: writerId,
           title: "Earnings Credited",
-          message: `Your work for "${reviewingAssignment.title}" was confirmed. ₹${writerEarnings} has been credited to your balance!`,
+          message: `Your work for "${reviewingAssignment.title}" was confirmed and your earnings have been credited to your balance!`,
           read: false,
         },
       ]);
@@ -800,12 +852,12 @@ const Orders = () => {
               {paymentLoading ? (
                 <>
                   <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
-                  Verifying Escrow Transaction...
+                  Opening Razorpay Checkout...
                 </>
               ) : (
                 <>
                   <CheckCircle2 size={16} />
-                  Simulate Payment (₹{payingAssignment.budget})
+                  Pay with Razorpay (₹{payingAssignment.budget})
                 </>
               )}
             </button>

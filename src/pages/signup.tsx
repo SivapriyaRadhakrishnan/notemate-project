@@ -118,6 +118,7 @@ const Signup = () => {
           password: data.password,
 
           options: {
+            emailRedirectTo: window.location.origin + "/verify-email",
             data: {
               full_name: data.fullName,
               role: role,
@@ -144,6 +145,7 @@ const Signup = () => {
           email: data.email,
           role: role,
           verified: role !== "writer",
+          email_verified: false,
           writer_status:
             role === "writer"
               ? "pending"
@@ -190,15 +192,10 @@ const Signup = () => {
         }
       }
 
-      if (role === "writer") {
-        alert(
-          "Application submitted successfully. Wait for admin approval."
-        );
-
-        navigate("/login");
-      } else {
-        navigate("/customer");
-      }
+      alert(
+        "Signup successful. Please verify your email to complete account activation."
+      );
+      navigate("/verify-email");
     } catch (error: any) {
       console.log(error);
       alert(error?.message || "An error occurred during signup");

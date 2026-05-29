@@ -10,6 +10,7 @@ create table if not exists public.profiles (
   full_name text not null,
   role text not null check (role in ('customer', 'writer', 'admin')),
   verified boolean not null default false,
+  email_verified boolean not null default false,
   writer_status text not null default 'pending' check (writer_status in ('pending', 'approved', 'rejected')),
   avatar_url text,
   college_id_key text,
@@ -23,7 +24,8 @@ create table if not exists public.profiles (
 
 alter table public.profiles
   add column if not exists phone text default '',
-  add column if not exists bio text default '';
+  add column if not exists bio text default '',
+  add column if not exists email_verified boolean not null default false;
 
 -- Enable RLS on Profiles
 alter table public.profiles enable row level security;
@@ -214,6 +216,30 @@ create policy "Allow users to read their own payments" on public.payments
 
 create policy "Allow inserting payment records" on public.payments
   for insert with check (auth.role() = 'authenticated');
+
+create table if not exists public.platform_commissions (
+  id uuid default gen_random_uuid() primary key,
+  assignment_id uuid references public.assignments on delete cascade not null,
+  amount numeric not null,
+  commission_rate numeric not null,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+alter table public.platform_commissions enable row level security;
+
+create policy "Allow admins to read platform commissions" on public.platform_commissions
+  for select using (public.current_user_role() = 'admin');
+
+create policy "Allow admins to insert platform commissions" on public.platform_commissions
+  for insert with check (public.current_user_role() = 'admin');
+
+create policy "Allow authenticated users to insert platform commissions" on public.platform_commissions
+  for insert with check (
+    auth.role() = 'authenticated' AND
+    amount >= 0 AND
+    commission_rate >= 0 AND
+    commission_rate <= 1
+  );
 
 
 -- 6. Notifications Table

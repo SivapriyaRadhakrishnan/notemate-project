@@ -47,6 +47,10 @@ const ProtectedRoute = ({
     return "/customer";
   };
 
+  if (session?.user && !session.user.email_confirmed_at) {
+    return <Navigate to="/verify-email" replace />;
+  }
+
   if (profile && allowedRoles && !allowedRoles.includes(profile.role)) {
     return <Navigate to={getDashboardRoute(profile.role)} replace />;
   }

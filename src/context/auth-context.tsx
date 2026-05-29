@@ -14,6 +14,7 @@ interface Profile {
   full_name: string;
   role: "customer" | "writer" | "admin";
   verified: boolean;
+  email_verified: boolean;
   writer_status?: "pending" | "approved" | "rejected";
   avatar_url?: string;
   college_id_key?: string;
@@ -59,36 +60,69 @@ export const AuthProvider = ({
         .eq("id", userId)
         .single();
 
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      const emailVerified = Boolean(
+        user?.email_confirmed_at
+      );
+
       if (error) {
-        // If not found, let's check metadata or create one
-        const { data: { user } } = await supabase.auth.getUser();
         if (user) {
-          const userRole = user.user_metadata?.role || "customer";
+          const userRole =
+            user.user_metadata?.role || "customer";
           const newProfile = {
             id: user.id,
-            full_name: user.user_metadata?.full_name || "",
-            role: userRole as "customer" | "writer" | "admin",
+            full_name:
+              user.user_metadata?.full_name || "",
+            role: userRole as
+              | "customer"
+              | "writer"
+              | "admin",
             verified: userRole !== "writer",
-            writer_status: userRole === "writer" ? "pending" : "approved",
-            avatar_url: user.user_metadata?.avatar_url || null,
-            college_id_key: user.user_metadata?.college_id_key || null,
+            email_verified: emailVerified,
+            writer_status:
+              userRole === "writer"
+                ? "pending"
+                : "approved",
+            avatar_url:
+              user.user_metadata?.avatar_url || null,
+            college_id_key:
+              user.user_metadata?.college_id_key || null,
             phone: user.user_metadata?.phone || "",
             bio: user.user_metadata?.bio || "",
             available_balance: 0,
             rating: 0,
-            rating_count: 0
+            rating_count: 0,
           };
-          
-          const { error: insertError } = await supabase
+
+          const {
+            error: insertError,
+          } = await supabase
             .from("profiles")
             .insert([newProfile]);
-          
+
           if (!insertError) {
             setProfile(newProfile as Profile);
           }
         }
       } else {
-        setProfile(data as Profile);
+        const profileData = data as Profile;
+
+        if (
+          user &&
+          profileData.email_verified !== emailVerified
+        ) {
+          await supabase
+            .from("profiles")
+            .update({ email_verified: emailVerified })
+            .eq("id", user.id);
+
+          profileData.email_verified = emailVerified;
+        }
+
+        setProfile(profileData);
       }
     } catch (err) {
       console.error("Error loading profile:", err);
